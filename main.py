@@ -1,10 +1,8 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import requests
-from bs4 import BeautifulSoup
 from PIL import Image, ImageTk
 from io import BytesIO
-import re
 import urllib.parse
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -14,10 +12,8 @@ import time
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import threading
-import math
 
 class ImageFrame(ttk.Frame):
     def __init__(self, parent, image, checkbox_var, *args, **kwargs):
