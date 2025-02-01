@@ -14,6 +14,19 @@ from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 import os
 import threading
+import urllib.request
+
+def fetch_image(poster_url):
+    try:
+        req = urllib.request.Request(
+            poster_url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+        )
+        response = urllib.request.urlopen(req)
+        return response.read()
+    except Exception as e:
+        print(f"Failed to load poster image: {e}")
+        return None
 
 class ImageFrame(ttk.Frame):
     def __init__(self, parent, image, checkbox_var, *args, **kwargs):
@@ -45,18 +58,75 @@ class ImageFrame(ttk.Frame):
     def toggle_selection(self, event=None):
         self.checkbox_var.set(not self.checkbox_var.get())
 
+class VideoFrame(ttk.Frame):
+    def __init__(self, parent, video_url, checkbox_var, poster_url, video_duration):
+        super().__init__(parent)  # Correct initialization
+        
+        self.video_url = video_url
+        self.checkbox_var = checkbox_var
+        
+        # Create an inner frame for the video and overlay
+        self.video_container = ttk.Frame(self)
+        self.video_container.pack(expand=True, fill="both")
+
+        # Load and display the poster image
+        if poster_url:
+            try:
+                image_data = fetch_image(poster_url)
+                if image_data:
+                    image = Image.open(BytesIO(image_data))
+                    image = image.resize((200, 120), Image.LANCZOS)
+                    self.poster_photo = ImageTk.PhotoImage(image)
+                image = Image.open(BytesIO(image_data))
+                image = image.resize((200, 120), Image.LANCZOS)  # Resize for consistency
+                self.poster_photo = ImageTk.PhotoImage(image)
+
+                # Label to display the image
+                self.video_label = ttk.Label(self.video_container, image=self.poster_photo)
+                self.video_label.pack(expand=True, fill="both")
+            except Exception as e:
+                print(f"Failed to load poster image: {e}")
+                self.video_label = ttk.Label(self.video_container, text="Video Preview", background="lightgray")
+                self.video_label.pack(expand=True, fill="both")
+        else:
+            # If no poster is available, show a placeholder
+            self.video_label = ttk.Label(self.video_container, text="Video Preview", background="lightgray")
+            self.video_label.pack(expand=True, fill="both")
+
+        self.duration_label = ttk.Label(self, text=f"⏳ {self.format_duration(video_duration)}")
+        self.duration_label.pack()
+
+        # Checkbox overlay
+        self.checkbox = ttk.Checkbutton(self.video_container, variable=checkbox_var)
+        self.checkbox.place(x=5, y=5)  # Top-left corner
+
+        # Bind click event to select/deselect
+        self.video_label.bind("<Button-1>", self.toggle_selection)
+
+    def toggle_selection(self, event=None):
+        self.checkbox_var.set(not self.checkbox_var.get())
+        
+    def format_duration(self, seconds):
+        """Format duration in HH:MM:SS"""
+        if seconds is None:
+            return "Unknown"
+        minutes, sec = divmod(int(seconds), 60)
+        hours, minutes = divmod(minutes, 60)
+        return f"{hours:02}:{minutes:02}:{sec:02}" if hours else f"{minutes:02}:{sec:02}"
+
+
 class ImageScraperUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Darkgoatie's Website Image Scraper")
+        self.root.title("Darkgoatie's Website Media Scraper")
         self.root.geometry("1000x800")
-        self.images = []
+        self.media = []  # Store both images and videos
         self.checkboxes = []
         self.driver = None
         self.session = requests.Session()
         self.is_processing = False
         self.processed_urls = set()
-        self.image_frames = []
+        self.media_frames = []
         
         self.create_ui()
         self.setup_browser()
@@ -76,11 +146,20 @@ class ImageScraperUI:
         ttk.Label(url_frame, text="Website URL:").pack(side="left")
         self.url_entry = ttk.Entry(url_frame, width=50)
         self.url_entry.pack(side="left", fill="x", expand=True, padx=5)
-        ttk.Button(url_frame, text="Fetch Images", command=self.fetch_images).pack(side="left")
+        ttk.Button(url_frame, text="Fetch Media", command=self.fetch_media).pack(side="left")
+
+        # Media Type Frame
+        media_type_frame = ttk.Frame(self.main_container, padding="5")
+        media_type_frame.grid(row=1, column=0, sticky="ew")
+        
+        self.media_type = tk.StringVar(value="photos")  # Default to photos
+        ttk.Radiobutton(media_type_frame, text="Photos", variable=self.media_type, value="photos").pack(side="left", padx=5)
+        ttk.Radiobutton(media_type_frame, text="Videos", variable=self.media_type, value="videos").pack(side="left", padx=5)
+        ttk.Radiobutton(media_type_frame, text="Both", variable=self.media_type, value="both").pack(side="left", padx=5)
 
         # Filter Frame
         filter_frame = ttk.Frame(self.main_container, padding="5")
-        filter_frame.grid(row=1, column=0, sticky="ew")
+        filter_frame.grid(row=2, column=0, sticky="ew")
         
         ttk.Label(filter_frame, text="Filter by:").pack(side="left")
         
@@ -98,7 +177,7 @@ class ImageScraperUI:
 
         # Scroll Frame
         scroll_frame = ttk.Frame(self.main_container, padding="5")
-        scroll_frame.grid(row=2, column=0, sticky="ew")
+        scroll_frame.grid(row=3, column=0, sticky="ew")
         ttk.Label(scroll_frame, text="Scroll Count:").pack(side="left")
         self.scroll_count = ttk.Entry(scroll_frame, width=5)
         self.scroll_count.pack(side="left", padx=5)
@@ -106,8 +185,8 @@ class ImageScraperUI:
 
         # Create canvas with scrollbar
         canvas_frame = ttk.Frame(self.main_container)
-        canvas_frame.grid(row=3, column=0, sticky="nsew")
-        self.main_container.grid_rowconfigure(3, weight=1)
+        canvas_frame.grid(row=4, column=0, sticky="nsew")
+        self.main_container.grid_rowconfigure(4, weight=1)
         self.main_container.grid_columnconfigure(0, weight=1)
 
         self.canvas = tk.Canvas(canvas_frame)
@@ -132,10 +211,7 @@ class ImageScraperUI:
 
         # Control buttons frame
         control_frame = ttk.Frame(self.main_container, padding="5")
-        control_frame.grid(row=4, column=0, sticky="ew")
-        
-        control_frame = ttk.Frame(self.main_container, padding="5")
-        control_frame.grid(row=4, column=0, sticky="ew")
+        control_frame.grid(row=5, column=0, sticky="ew")
         
         ttk.Button(control_frame, text="Select All", command=self.select_all).pack(side="left", padx=5)
         ttk.Button(control_frame, text="Deselect All", command=self.deselect_all).pack(side="left", padx=5)
@@ -151,7 +227,7 @@ class ImageScraperUI:
         # Status bar
         self.status_var = tk.StringVar()
         self.status_bar = ttk.Label(self.main_container, textvariable=self.status_var, relief="sunken")
-        self.status_bar.grid(row=5, column=0, sticky="ew")
+        self.status_bar.grid(row=6, column=0, sticky="ew")
 
     def on_mousewheel(self, event):
         if event.num == 4 or event.num == 5:
@@ -162,18 +238,18 @@ class ImageScraperUI:
         return "break"
 
     def on_window_resize(self, event=None):
-        if hasattr(self, 'current_images'):
+        if hasattr(self, 'current_media'):
             self.reorganize_grid()
 
     def reorganize_grid(self):
-        for frame in self.image_frames:
+        for frame in self.media_frames:
             frame.grid_forget()
 
         window_width = self.canvas.winfo_width()
-        image_width = 220  # Image width + padding
-        num_columns = max(1, window_width // image_width)
+        media_width = 220  # Media width + padding
+        num_columns = max(1, window_width // media_width)
 
-        for index, frame in enumerate(self.image_frames):
+        for index, frame in enumerate(self.media_frames):
             row = index // num_columns
             col = index % num_columns
             frame.grid(row=row, column=col, padx=5, pady=5, sticky="nsew")
@@ -181,7 +257,7 @@ class ImageScraperUI:
         for i in range(num_columns):
             self.scrollable_frame.grid_columnconfigure(i, weight=1)
 
-    def fetch_images(self):
+    def fetch_media(self):
         url = self.url_entry.get().strip()
         if not url:
             self.status_var.set("Please enter a URL")
@@ -192,9 +268,9 @@ class ImageScraperUI:
         try:
             for widget in self.scrollable_frame.winfo_children():
                 widget.destroy()
-            self.images = []
+            self.media = []
             self.checkboxes = []
-            self.image_frames = []
+            self.media_frames = []
             self.processed_urls = set()
 
             self.status_var.set("Loading page...")
@@ -208,119 +284,153 @@ class ImageScraperUI:
                 EC.presence_of_element_located((By.TAG_NAME, "img"))
             )
 
-            images = self.driver.find_elements(By.TAG_NAME, "img")
-            total_images = len(images)
-            processed_count = 0
+            media_type = self.media_type.get()
+            if media_type in ["photos", "both"]:
+                self.fetch_images()
+            if media_type in ["videos", "both"]:
+                self.fetch_videos()
 
-            self.status_var.set(f"Processing {total_images} images...")
-            self.root.update()
-
-            for img in images:
-                if not self.matches_filters(img):
-                    continue
-                    
-                img_src = img.get_attribute("src")
-                if not img_src or img_src.startswith('data:'):
-                    continue
-
-                img_src = urllib.parse.urljoin(url, img_src)
-                if img_src in self.processed_urls:
-                    continue
-
-                self.processed_urls.add(img_src)
-
-                try:
-                    response = requests.get(img_src, timeout=3)
-                    response.raise_for_status()
-
-                    if "image" not in response.headers.get("Content-Type", ""):
-                        continue
-
-                    img_pil = Image.open(BytesIO(response.content))
-                    if img_pil.width > 200:
-                        ratio = 200 / img_pil.width
-                        img_pil = img_pil.resize((200, int(img_pil.height * ratio)))
-
-                    photo = ImageTk.PhotoImage(img_pil)
-
-                    chk_var = tk.BooleanVar()
-                    self.checkboxes.append(chk_var)
-
-                    # Create ImageFrame instance
-                    img_frame = ImageFrame(self.scrollable_frame, photo, chk_var)
-                    self.image_frames.append(img_frame)
-
-                    # Add source label below the image
-                    ttk.Label(img_frame, text=f"Source: {img_src[:50]}...", wraplength=200).pack()
-
-                    self.images.append({'src': img_src})
-                    processed_count += 1
-                    self.status_var.set(f"Processing {processed_count}/{total_images} images...")
-                    self.root.update()
-                    
-                except requests.exceptions.HTTPError as errh:
-                    if response.status_code == 404:
-                        print(f"Skipping: {img_src} (404 Not Found)")
-                    else:
-                        print(f"HTTP Error: {errh}")
-                        
-                except Exception as e:
-                    print(f"Error processing image {img_src}: {e}")
-                    continue
-
-            self.status_var.set(f"Found {len(self.images)} matching images")
+            self.status_var.set(f"Found {len(self.media)} matching media items")
             self.reorganize_grid()
             self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
         except Exception as e:
             self.status_var.set(f"Error: {str(e)}")
 
-    def matches_filters(self, img_element):
+    def fetch_images(self):
+        images = self.driver.find_elements(By.TAG_NAME, "img")
+        total_images = len(images)
+        processed_count = 0
+
+        self.status_var.set(f"Processing {total_images} images...")
+        self.root.update()
+
+        for img in images:
+            if not self.matches_filters(img):
+                continue
+                
+            img_src = img.get_attribute("src")
+            if not img_src or img_src.startswith('data:'):
+                continue
+
+            img_src = urllib.parse.urljoin(self.driver.current_url, img_src)
+            if img_src in self.processed_urls:
+                continue
+
+            self.processed_urls.add(img_src)
+
+            try:
+                response = requests.get(img_src, timeout=3)
+                response.raise_for_status()
+
+                if "image" not in response.headers.get("Content-Type", ""):
+                    continue
+
+                img_pil = Image.open(BytesIO(response.content))
+                if img_pil.width > 200:
+                    ratio = 200 / img_pil.width
+                    img_pil = img_pil.resize((200, int(img_pil.height * ratio)))
+
+                photo = ImageTk.PhotoImage(img_pil)
+
+                chk_var = tk.BooleanVar()
+                self.checkboxes.append(chk_var)
+
+                # Create ImageFrame instance
+                img_frame = ImageFrame(self.scrollable_frame, photo, chk_var)
+                self.media_frames.append(img_frame)
+
+                # Add source label below the image
+                ttk.Label(img_frame, text=f"Source: {img_src[:50]}...", wraplength=200).pack()
+
+                self.media.append({'type': 'image', 'src': img_src})
+                processed_count += 1
+                self.status_var.set(f"Processing {processed_count}/{total_images} images...")
+                self.root.update()
+                
+            except requests.exceptions.HTTPError as errh:
+                if response.status_code == 404:
+                    print(f"Skipping: {img_src} (404 Not Found)")
+                else:
+                    print(f"HTTP Error: {errh}")
+                    
+            except Exception as e:
+                print(f"Error processing image {img_src}: {e}")
+                continue
+
+    def fetch_videos(self):
+        videos = self.driver.find_elements(By.TAG_NAME, "video")
+        total_videos = len(videos)
+        processed_count = 0
+
+        self.status_var.set(f"Processing {total_videos} videos...")
+        self.root.update()
+
+        for video in videos:
+            if not self.matches_filters(video):
+                continue
+
+            video_src = video.find_element(By.TAG_NAME, "source").get_attribute("src")
+            video_thumbnail = video.get_attribute("poster")
+
+            if not video_src:
+                continue
+
+            video_src = urllib.parse.urljoin(self.driver.current_url, video_src)
+            if video_src in self.processed_urls:
+                continue
+
+            self.processed_urls.add(video_src)
+
+            chk_var = tk.BooleanVar()
+            self.checkboxes.append(chk_var)
+
+            # Create VideoFrame instance with the duration
+            video_frame = VideoFrame(self.scrollable_frame, video_src, chk_var, video_thumbnail, video_duration)
+            self.media_frames.append(video_frame)
+
+            # Add source label below the video
+            ttk.Label(video_frame, text=f"Source: {video_src[:50]}...", wraplength=200).pack()
+
+            self.media.append({'type': 'video', 'src': video_src})
+            processed_count += 1
+            self.status_var.set(f"Processing {processed_count}/{total_videos} videos...")
+            self.root.update()
+
+    def matches_filters(self, element):
         class_filter = self.class_filter.get().strip()
         id_filter = self.id_filter.get().strip()
         src_filter = self.src_filter.get().strip()
         
         if class_filter:
-            img_class = img_element.get_attribute("class")
-            if not img_class or class_filter not in img_class:
+            element_class = element.get_attribute("class")
+            if not element_class or class_filter not in element_class:
                 return False
                 
         if id_filter:
-            img_id = img_element.get_attribute("id")
-            if not img_id or id_filter not in img_id:
+            element_id = element.get_attribute("id")
+            if not element_id or id_filter not in element_id:
                 return False
                 
         if src_filter:
-            img_src = img_element.get_attribute("src")
-            if not img_src or src_filter not in img_src:
+            element_src = element.get_attribute("src")
+            if not element_src or src_filter not in element_src:
                 return False
                 
         return True
 
     def scroll_page(self, scroll_count):
-        """
-        Scroll the page to the bottom, ensuring all content is loaded.
-        Uses both manual scrolling and JavaScript methods for maximum coverage.
-        """
         last_height = self.driver.execute_script("return document.body.scrollHeight")
         scrolls_without_change = 0
-        max_unchanged_scrolls = 3  # Number of times to try scrolling with no height change before stopping
+        max_unchanged_scrolls = 3
 
         for i in range(int(scroll_count)):
             self.status_var.set(f"Scrolling page... ({i+1}/{scroll_count})")
             self.root.update()
 
-            # Try multiple scrolling methods
-            # 1. Scroll to bottom using JavaScript
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-
-            # 3. Final scroll to bottom
-            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-
-            # Wait for dynamic content to load
             time.sleep(2)
 
-            # Check if the page height has changed
             new_height = self.driver.execute_script("return document.body.scrollHeight")
 
             if new_height == last_height:
@@ -333,13 +443,10 @@ class ImageScraperUI:
 
             last_height = new_height
 
-            # Try to trigger any lazy loading
             self.driver.execute_script("""
                 document.documentElement.scrollTop = 0;
                 document.documentElement.scrollTop = document.documentElement.scrollHeight;
             """)
-
-            # Additional wait for any final loading
             time.sleep(1)
 
     def select_all(self):
@@ -353,15 +460,13 @@ class ImageScraperUI:
     def download_selected(self):
         selected_indices = [i for i, chk in enumerate(self.checkboxes) if chk.get()]
         if not selected_indices:
-            messagebox.showinfo("Info", "No images selected")
+            messagebox.showinfo("Info", "No media selected")
             return
 
-        # Get download path from entry
         download_path = self.download_path.get().strip()
         if not download_path:
-            download_path = "downloads"  # Fallback to default
+            download_path = "downloads"
             
-        # Create directory if it doesn't exist
         try:
             os.makedirs(download_path, exist_ok=True)
         except Exception as e:
@@ -373,15 +478,15 @@ class ImageScraperUI:
             failed = 0
             for idx in selected_indices:
                 try:
-                    img_url = self.images[idx]['src']
-                    response = requests.get(img_url, timeout=5)
+                    media_url = self.media[idx]['src']
+                    response = requests.get(media_url, timeout=5)
                     response.raise_for_status()
                     
-                    filename = os.path.basename(urllib.parse.urlparse(img_url).path)
+                    filename = os.path.basename(urllib.parse.urlparse(media_url).path)
                     if not filename or filename.isspace():
-                        filename = f"image_{idx}.jpg"
+                        filename = f"media_{idx}.{'mp4' if self.media[idx]['type'] == 'video' else 'jpg'}"
                     
-                    filepath = os.path.join(download_path, filename)  # Use custom path
+                    filepath = os.path.join(download_path, filename)
                     
                     base, ext = os.path.splitext(filepath)
                     counter = 1
@@ -394,15 +499,15 @@ class ImageScraperUI:
                     downloaded += 1
                     
                 except Exception as e:
-                    print(f"Error downloading {img_url}: {e}")
+                    print(f"Error downloading {media_url}: {e}")
                     failed += 1
                 
                 self.status_var.set(f"Downloaded: {downloaded}, Failed: {failed}")
                 self.root.update()
             
             messagebox.showinfo("Download Complete", 
-                              f"Successfully downloaded {downloaded} images\n"
-                              f"Failed to download {failed} images\n"
+                              f"Successfully downloaded {downloaded} media items\n"
+                              f"Failed to download {failed} media items\n"
                               f"Location: {os.path.abspath(download_path)}")
 
         threading.Thread(target=download_thread, daemon=True).start()
