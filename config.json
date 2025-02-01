@@ -1,4 +1,4 @@
 {
-  "workers": 5,
-  "defaultDownloadDirectory": "downloads"
+  "defaultDownloadDirectory": "downloads",
+  "defaultScrolls": "5"
 }

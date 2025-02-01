@@ -16,6 +16,17 @@ import os
 import threading
 import urllib.request
 
+def get_video_size(video_url):
+    try:
+        response = requests.head(video_url, timeout=5)
+        response.raise_for_status()
+        size_in_bytes = int(response.headers.get('Content-Length', 0))
+        size_in_mb = size_in_bytes / (1024 * 1024)  # Convert bytes to MB
+        return round(size_in_mb, 2)  # Round to 2 decimal places
+    except Exception as e:
+        print(f"Failed to get video size: {e}")
+        return None
+
 def fetch_image(poster_url):
     try:
         req = urllib.request.Request(
@@ -59,7 +70,7 @@ class ImageFrame(ttk.Frame):
         self.checkbox_var.set(not self.checkbox_var.get())
 
 class VideoFrame(ttk.Frame):
-    def __init__(self, parent, video_url, checkbox_var, poster_url, video_duration):
+    def __init__(self, parent, video_url, checkbox_var, poster_url, video_size):
         super().__init__(parent)  # Correct initialization
         
         self.video_url = video_url
@@ -93,8 +104,9 @@ class VideoFrame(ttk.Frame):
             self.video_label = ttk.Label(self.video_container, text="Video Preview", background="lightgray")
             self.video_label.pack(expand=True, fill="both")
 
-        self.duration_label = ttk.Label(self, text=f"⏳ {self.format_duration(video_duration)}")
-        self.duration_label.pack()
+        # Display video size instead of duration
+        self.size_label = ttk.Label(self, text=f"📦 {video_size} MB" if video_size else "📦 Size: Unknown")
+        self.size_label.pack()
 
         # Checkbox overlay
         self.checkbox = ttk.Checkbutton(self.video_container, variable=checkbox_var)
@@ -105,14 +117,6 @@ class VideoFrame(ttk.Frame):
 
     def toggle_selection(self, event=None):
         self.checkbox_var.set(not self.checkbox_var.get())
-        
-    def format_duration(self, seconds):
-        """Format duration in HH:MM:SS"""
-        if seconds is None:
-            return "Unknown"
-        minutes, sec = divmod(int(seconds), 60)
-        hours, minutes = divmod(minutes, 60)
-        return f"{hours:02}:{minutes:02}:{sec:02}" if hours else f"{minutes:02}:{sec:02}"
 
 
 class ImageScraperUI:
@@ -382,11 +386,14 @@ class ImageScraperUI:
 
             self.processed_urls.add(video_src)
 
+            # Fetch video size
+            video_size = get_video_size(video_src)
+
             chk_var = tk.BooleanVar()
             self.checkboxes.append(chk_var)
 
-            # Create VideoFrame instance with the duration
-            video_frame = VideoFrame(self.scrollable_frame, video_src, chk_var, video_thumbnail, video_duration)
+            # Create VideoFrame instance with the video size
+            video_frame = VideoFrame(self.scrollable_frame, video_src, chk_var, video_thumbnail, video_size)
             self.media_frames.append(video_frame)
 
             # Add source label below the video
@@ -466,47 +473,74 @@ class ImageScraperUI:
         download_path = self.download_path.get().strip()
         if not download_path:
             download_path = "downloads"
-            
+
         try:
             os.makedirs(download_path, exist_ok=True)
         except Exception as e:
             messagebox.showerror("Error", f"Could not create directory: {str(e)}")
             return
 
+        # Create a progress bar
+        self.progress_bar = ttk.Progressbar(self.main_container, orient="horizontal", length=300, mode="determinate")
+        self.progress_bar.grid(row=7, column=0, sticky="ew", pady=5)
+
         def download_thread():
             downloaded = 0
+            skipped = 0
             failed = 0
             for idx in selected_indices:
                 try:
                     media_url = self.media[idx]['src']
-                    response = requests.get(media_url, timeout=5)
-                    response.raise_for_status()
-                    
                     filename = os.path.basename(urllib.parse.urlparse(media_url).path)
                     if not filename or filename.isspace():
                         filename = f"media_{idx}.{'mp4' if self.media[idx]['type'] == 'video' else 'jpg'}"
-                    
+
                     filepath = os.path.join(download_path, filename)
-                    
+
+                    # Check if the file already exists
+                    if os.path.exists(filepath):
+                        skipped += 1
+                        self.status_var.set(f"Skipping {filename}: File already exists")
+                        self.root.update()
+                        continue
+
+                    response = requests.get(media_url, stream=True, timeout=5)
+                    response.raise_for_status()
+
                     base, ext = os.path.splitext(filepath)
                     counter = 1
                     while os.path.exists(filepath):
                         filepath = f"{base}_{counter}{ext}"
                         counter += 1
-                    
+
+                    total_size = int(response.headers.get('content-length', 0))
+                    downloaded_size = 0
+
+                    self.progress_bar["maximum"] = total_size
+
                     with open(filepath, 'wb') as f:
-                        f.write(response.content)
+                        for chunk in response.iter_content(chunk_size=65536):
+                            if chunk:  # filter out keep-alive new chunks
+                                f.write(chunk)
+                                downloaded_size += len(chunk)
+                                # Update progress bar
+                                self.progress_bar["value"] = downloaded_size
+                                self.status_var.set(f"Downloading {filename}: {downloaded_size / (1024 * 1024):.2f} MB / {total_size / (1024 * 1024):.2f} MB")
+                                self.root.update()
+
                     downloaded += 1
-                    
+
                 except Exception as e:
                     print(f"Error downloading {media_url}: {e}")
                     failed += 1
-                
-                self.status_var.set(f"Downloaded: {downloaded}, Failed: {failed}")
+
+                self.status_var.set(f"Downloaded: {downloaded}, Skipped: {skipped}, Failed: {failed}")
                 self.root.update()
-            
+
+            self.progress_bar.grid_forget()  # Hide progress bar after download
             messagebox.showinfo("Download Complete", 
                               f"Successfully downloaded {downloaded} media items\n"
+                              f"Skipped {skipped} media items (already exists)\n"
                               f"Failed to download {failed} media items\n"
                               f"Location: {os.path.abspath(download_path)}")
 
