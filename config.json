@@ -1,4 +1,5 @@
 {
-  "defaultDownloadDirectory": "downloads",
-  "defaultScrolls": "5"
+    "defaultDownloadDirectory": "ImageScraperDownloads",
+    "defaultScrolls": "5",
+    "videoDownloadChunkSize": 65536
 }

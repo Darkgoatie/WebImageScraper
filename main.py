@@ -15,6 +15,18 @@ from webdriver_manager.chrome import ChromeDriverManager
 import os
 import threading
 import urllib.request
+import json
+from pathlib import Path
+
+configfile = "config.json"
+def loadJsonConfiguration():
+    try:
+        with open(configfile, "r") as file:
+            configdata = json.load(file)
+        return configdata
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to load JSON configuration: {e}")
+        return {}
 
 def get_video_size(video_url):
     try:
@@ -123,7 +135,7 @@ class ImageScraperUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Darkgoatie's Website Media Scraper")
-        self.root.geometry("1000x800")
+        self.root.geometry("1200x800")
         self.media = []  # Store both images and videos
         self.checkboxes = []
         self.driver = None
@@ -131,11 +143,13 @@ class ImageScraperUI:
         self.is_processing = False
         self.processed_urls = set()
         self.media_frames = []
-        
+        self.configdata = loadJsonConfiguration()
+
         self.create_ui()
         self.setup_browser()
 
         self.root.bind('<Configure>', self.on_window_resize)
+
 
     def create_ui(self):
         # Main container
@@ -185,7 +199,7 @@ class ImageScraperUI:
         ttk.Label(scroll_frame, text="Scroll Count:").pack(side="left")
         self.scroll_count = ttk.Entry(scroll_frame, width=5)
         self.scroll_count.pack(side="left", padx=5)
-        self.scroll_count.insert(0, "5")
+        self.scroll_count.insert(0, self.configdata["defaultScrolls"])
 
         # Create canvas with scrollbar
         canvas_frame = ttk.Frame(self.main_container)
@@ -222,16 +236,68 @@ class ImageScraperUI:
         
         # Add download path entry
         ttk.Label(control_frame, text="Download Path:").pack(side="left", padx=5)
-        self.download_path = ttk.Entry(control_frame, width=30)
+        self.download_path = ttk.Entry(control_frame, width=45)
         self.download_path.pack(side="left", padx=5)
-        self.download_path.insert(0, "downloads")  # Default path
+        self.download_path.insert(0, os.path.join(Path.home(), "Downloads" , self.configdata["defaultDownloadDirectory"]))  # Default path
         
         ttk.Button(control_frame, text="Download Selected", command=self.download_selected).pack(side="left", padx=5)
+
+        # Add a button to edit JSON configuration
+        ttk.Button(control_frame, text="Edit Config", command=self.open_json_editor).pack(side="left", padx=5)
 
         # Status bar
         self.status_var = tk.StringVar()
         self.status_bar = ttk.Label(self.main_container, textvariable=self.status_var, relief="sunken")
         self.status_bar.grid(row=6, column=0, sticky="ew")
+
+
+    def open_json_editor(self):
+        # Create a new top-level window
+        self.json_editor_window = tk.Toplevel(self.root)
+        self.json_editor_window.title("Edit JSON Configuration")
+        self.json_editor_window.geometry("600x400")
+
+        # Create a Text widget to display and edit the JSON data
+        self.json_text = tk.Text(self.json_editor_window, wrap="none")
+        self.json_text.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Load the current JSON data into the Text widget
+        try:
+            with open(configfile, "r") as file:
+                json_data = json.load(file)
+                self.json_text.insert("1.0", json.dumps(json_data, indent=4))
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load JSON data: {e}")
+            self.json_editor_window.destroy()
+            return
+
+        # Add a Save button to save the changes
+        save_button = ttk.Button(self.json_editor_window, text="Save", command=self.save_json_changes)
+        save_button.pack(pady=10)
+
+    def save_json_changes(self):
+        try:
+            # Get the edited JSON data from the Text widget
+            json_data = self.json_text.get("1.0", "end-1c")
+
+            # Validate the JSON data
+            json.loads(json_data)  # This will raise an error if the JSON is invalid
+
+            # Write the updated JSON data back to the file
+            with open(configfile, "w") as file:
+                file.write(json_data)
+
+            # Reload the configuration data
+            self.configdata = loadJsonConfiguration()
+
+            # Notify the user that the changes were saved successfully
+            messagebox.showinfo("Success", "JSON configuration saved successfully!")
+            self.json_editor_window.destroy()
+
+        except json.JSONDecodeError as e:
+            messagebox.showerror("Error", f"Invalid JSON data: {e}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save JSON data: {e}")
 
     def on_mousewheel(self, event):
         if event.num == 4 or event.num == 5:
@@ -519,7 +585,7 @@ class ImageScraperUI:
                     self.progress_bar["maximum"] = total_size
 
                     with open(filepath, 'wb') as f:
-                        for chunk in response.iter_content(chunk_size=65536):
+                        for chunk in response.iter_content(chunk_size=self.configdata["videoDownloadChunkSize"]):
                             if chunk:  # filter out keep-alive new chunks
                                 f.write(chunk)
                                 downloaded_size += len(chunk)
