@@ -18,7 +18,7 @@ import urllib.request
 import json
 from pathlib import Path
 
-configfile = "config.json"
+configfile = "data/config.json"
 def loadJsonConfiguration():
     try:
         with open(configfile, "r") as file:
@@ -39,7 +39,7 @@ def get_video_size(video_url):
         print(f"Failed to get video size: {e}")
         return None
 
-def fetch_image(poster_url):
+def fetch_image(poster_url, ref):
     try:
         req = urllib.request.Request(
             poster_url,
@@ -169,7 +169,7 @@ class ImageScraperUI:
         # Media Type Frame
         media_type_frame = ttk.Frame(self.main_container, padding="5")
         media_type_frame.grid(row=1, column=0, sticky="ew")
-        
+
         self.media_type = tk.StringVar(value="photos")  # Default to photos
         ttk.Radiobutton(media_type_frame, text="Photos", variable=self.media_type, value="photos").pack(side="left", padx=5)
         ttk.Radiobutton(media_type_frame, text="Videos", variable=self.media_type, value="videos").pack(side="left", padx=5)
@@ -178,17 +178,17 @@ class ImageScraperUI:
         # Filter Frame
         filter_frame = ttk.Frame(self.main_container, padding="5")
         filter_frame.grid(row=2, column=0, sticky="ew")
-        
+
         ttk.Label(filter_frame, text="Filter by:").pack(side="left")
-        
+
         self.class_filter = ttk.Entry(filter_frame, width=15)
         ttk.Label(filter_frame, text="Class:").pack(side="left")
         self.class_filter.pack(side="left", padx=5)
-        
+
         self.id_filter = ttk.Entry(filter_frame, width=15)
         ttk.Label(filter_frame, text="ID:").pack(side="left")
         self.id_filter.pack(side="left", padx=5)
-        
+
         self.src_filter = ttk.Entry(filter_frame, width=15)
         ttk.Label(filter_frame, text="Src contains:").pack(side="left")
         self.src_filter.pack(side="left", padx=5)
@@ -201,10 +201,14 @@ class ImageScraperUI:
         self.scroll_count.pack(side="left", padx=5)
         self.scroll_count.insert(0, self.configdata["defaultScrolls"])
 
+        # Do not load images option
+        self.do_not_load_images_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self.main_container, text="Do not load images", variable=self.do_not_load_images_var).grid(row=4, column=0, sticky="w", padx=5)
+
         # Create canvas with scrollbar
         canvas_frame = ttk.Frame(self.main_container)
-        canvas_frame.grid(row=4, column=0, sticky="nsew")
-        self.main_container.grid_rowconfigure(4, weight=1)
+        canvas_frame.grid(row=5, column=0, sticky="nsew")
+        self.main_container.grid_rowconfigure(5, weight=1)
         self.main_container.grid_columnconfigure(0, weight=1)
 
         self.canvas = tk.Canvas(canvas_frame)
@@ -229,17 +233,17 @@ class ImageScraperUI:
 
         # Control buttons frame
         control_frame = ttk.Frame(self.main_container, padding="5")
-        control_frame.grid(row=5, column=0, sticky="ew")
-        
+        control_frame.grid(row=6, column=0, sticky="ew")
+
         ttk.Button(control_frame, text="Select All", command=self.select_all).pack(side="left", padx=5)
         ttk.Button(control_frame, text="Deselect All", command=self.deselect_all).pack(side="left", padx=5)
-        
+
         # Add download path entry
         ttk.Label(control_frame, text="Download Path:").pack(side="left", padx=5)
         self.download_path = ttk.Entry(control_frame, width=45)
         self.download_path.pack(side="left", padx=5)
         self.download_path.insert(0, os.path.join(Path.home(), "Downloads" , self.configdata["defaultDownloadDirectory"]))  # Default path
-        
+
         ttk.Button(control_frame, text="Download Selected", command=self.download_selected).pack(side="left", padx=5)
 
         # Add a button to edit JSON configuration
@@ -248,7 +252,7 @@ class ImageScraperUI:
         # Status bar
         self.status_var = tk.StringVar()
         self.status_bar = ttk.Label(self.main_container, textvariable=self.status_var, relief="sunken")
-        self.status_bar.grid(row=6, column=0, sticky="ew")
+        self.status_bar.grid(row=7, column=0, sticky="ew")
 
 
     def open_json_editor(self):
@@ -368,17 +372,80 @@ class ImageScraperUI:
             self.status_var.set(f"Error: {str(e)}")
 
     def fetch_images(self):
-        images = self.driver.find_elements(By.TAG_NAME, "img")
+        unfilteredimages = self.driver.find_elements(By.TAG_NAME, "img")
+        images = list(filter(self.matches_filters, unfilteredimages))
         total_images = len(images)
         processed_count = 0
-
+    
         self.status_var.set(f"Processing {total_images} images...")
         self.root.update()
+
+    # Rest of the fetch_images method remains the same...
+
+        # First, capture a successful image request's headers
+        reference_headers = None
+        if images:
+            try:
+                # Execute JavaScript to capture headers from a successful image load
+                reference_headers = self.driver.execute_script("""
+                    return new Promise((resolve) => {
+                        // Create a test image
+                        const img = new Image();
+
+                        // Create a fetch observer
+                        const observer = new PerformanceObserver((list) => {
+                            const entries = list.getEntries();
+                            for (const entry of entries) {
+                                // Look for successful image loads
+                                if (entry.initiatorType === 'img' && entry.duration > 0) {
+                                    // Make a test request to get headers
+                                    fetch(entry.name, {
+                                        method: 'GET',
+                                        credentials: 'same-origin'
+                                    }).then(response => {
+                                        // Get the request headers from the browser
+                                        const headers = {};
+                                        headers['Referer'] = document.location.href;
+                                        headers['Origin'] = window.location.origin;
+                                        headers['Host'] = new URL(entry.name).host;
+                                        headers['Accept'] = 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8';
+                                        headers['Accept-Encoding'] = 'gzip, deflate, br';
+                                        headers['Connection'] = 'keep-alive';
+                                        headers['User-Agent'] = navigator.userAgent;
+                                        resolve(headers);
+                                    });
+                                }
+                            }
+                        });
+                
+                        // Start observing
+                        observer.observe({ entryTypes: ['resource'] });
+
+                        // Load the first image to trigger the observation
+                        img.src = arguments[0];
+                    });
+                """, images[0].get_attribute("src"))
+
+                print("Captured reference headers:", json.dumps(reference_headers, indent=2))
+
+            except Exception as e:
+                print(f"Error capturing reference headers: {e}")
+                reference_headers = {
+                    'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Connection': 'keep-alive',
+                    'User-Agent': self.driver.execute_script('return navigator.userAgent;'),
+                    'Referer': self.driver.current_url,
+                    'Origin': urllib.parse.urlparse(self.driver.current_url).scheme + '://' + urllib.parse.urlparse(self.driver.current_url).netloc,
+                }
+
+        session = requests.Session()
+        session.headers.update(reference_headers)
 
         for img in images:
             if not self.matches_filters(img):
                 continue
-                
+
             img_src = img.get_attribute("src")
             if not img_src or img_src.startswith('data:'):
                 continue
@@ -390,46 +457,64 @@ class ImageScraperUI:
             self.processed_urls.add(img_src)
 
             try:
-                response = requests.get(img_src, timeout=3)
-                response.raise_for_status()
+                # Adjust headers for this specific request
+                current_headers = reference_headers.copy()
+                parsed_url = urllib.parse.urlparse(img_src)
 
-                if "image" not in response.headers.get("Content-Type", ""):
-                    continue
+                # Update domain-specific headers
+                current_headers['Host'] = parsed_url.netloc
+                if parsed_url.netloc != urllib.parse.urlparse(self.driver.current_url).netloc:
+                    current_headers['Sec-Fetch-Site'] = 'cross-site'
+                else:
+                    current_headers['Sec-Fetch-Site'] = 'same-origin'
 
-                img_pil = Image.open(BytesIO(response.content))
-                if img_pil.width > 200:
-                    ratio = 200 / img_pil.width
-                    img_pil = img_pil.resize((200, int(img_pil.height * ratio)))
+                if self.do_not_load_images_var.get() == False:
+                    # Make the request
+                    response = session.get(img_src, headers=current_headers, timeout=5)
+                    response.raise_for_status()
 
-                photo = ImageTk.PhotoImage(img_pil)
+                    if "image" not in response.headers.get("Content-Type", ""):
+                        continue
+
+                    img_pil = Image.open(BytesIO(response.content))
+                    if img_pil.width > 200:
+                        ratio = 200 / img_pil.width
+                        img_pil = img_pil.resize((200, int(img_pil.height * ratio)))
+
+                    photo = ImageTk.PhotoImage(img_pil)
+
+
+                if self.do_not_load_images_var.get() == True:
+                    img_pil = Image.new("RGB", (200, 200), (255, 255, 255))
+                    photo = ImageTk.PhotoImage(img_pil)
 
                 chk_var = tk.BooleanVar()
                 self.checkboxes.append(chk_var)
 
-                # Create ImageFrame instance
                 img_frame = ImageFrame(self.scrollable_frame, photo, chk_var)
                 self.media_frames.append(img_frame)
-
-                # Add source label below the image
                 ttk.Label(img_frame, text=f"Source: {img_src[:50]}...", wraplength=200).pack()
 
                 self.media.append({'type': 'image', 'src': img_src})
                 processed_count += 1
                 self.status_var.set(f"Processing {processed_count}/{total_images} images...")
                 self.root.update()
-                
+
             except requests.exceptions.HTTPError as errh:
-                if response.status_code == 404:
-                    print(f"Skipping: {img_src} (404 Not Found)")
-                else:
-                    print(f"HTTP Error: {errh}")
-                    
+                print(f"HTTP Error for {img_src}: {errh}")
+                if hasattr(errh, 'response'):
+                    print(f"Response status: {errh.response.status_code}")
+                    print("Response headers:")
+                    print(json.dumps(dict(errh.response.headers), indent=2))
+                continue
+
             except Exception as e:
                 print(f"Error processing image {img_src}: {e}")
                 continue
 
     def fetch_videos(self):
-        videos = self.driver.find_elements(By.TAG_NAME, "video")
+        unfilteredvideos = self.driver.find_elements(By.TAG_NAME, "video")
+        videos = list(filter(self.matches_filters, unfilteredvideos))
         total_videos = len(videos)
         processed_count = 0
 
@@ -502,7 +587,7 @@ class ImageScraperUI:
             self.root.update()
 
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(2)
+            time.sleep(0.5)
 
             new_height = self.driver.execute_script("return document.body.scrollHeight")
 
@@ -520,7 +605,7 @@ class ImageScraperUI:
                 document.documentElement.scrollTop = 0;
                 document.documentElement.scrollTop = document.documentElement.scrollHeight;
             """)
-            time.sleep(1)
+            time.sleep(0.1)
 
     def select_all(self):
         for chk in self.checkboxes:
@@ -554,6 +639,70 @@ class ImageScraperUI:
             downloaded = 0
             skipped = 0
             failed = 0
+
+            # Capture headers from a successful video request
+            reference_headers = None
+            try:
+                # Execute JavaScript to capture headers from a successful video load
+                reference_headers = self.driver.execute_script("""
+                    return new Promise((resolve) => {
+                        // Create a test video element
+                        const video = document.createElement('video');
+
+                        // Create a fetch observer
+                        const observer = new PerformanceObserver((list) => {
+                            const entries = list.getEntries();
+                            for (const entry of entries) {
+                                // Look for successful video loads
+                                if (entry.initiatorType === 'video' && entry.duration > 0) {
+                                    // Make a test request to get headers
+                                    fetch(entry.name, {
+                                        method: 'GET',
+                                        credentials: 'same-origin'
+                                    }).then(response => {
+                                        // Get the request headers from the browser
+                                        const headers = {};
+                                        headers['Referer'] = document.location.href;
+                                        headers['Origin'] = window.location.origin;
+                                        headers['Host'] = new URL(entry.name).host;
+                                        headers['Accept'] = 'video/mp4,video/webm,video/ogg';
+                                        headers['Accept-Encoding'] = 'gzip, deflate, br';
+                                        headers['Connection'] = 'keep-alive';
+                                        headers['User-Agent'] = navigator.userAgent;
+                                        resolve(headers);
+                                    });
+                                }
+                            }
+                        });
+
+                        // Start observing
+                        observer.observe({ entryTypes: ['resource'] });
+
+                        // Load the first video to trigger the observation
+                        video.src = arguments[0];
+                        video.load();
+                    });
+                """, self.media[selected_indices[0]]['src'])
+
+                print("Captured reference headers for video:", json.dumps(reference_headers, indent=2))
+
+            except Exception as e:
+                print(f"Error capturing reference headers for video: {e}")
+
+            if not reference_headers:
+                # Fallback headers if we couldn't capture real ones
+                reference_headers = {
+                    'Accept': 'video/mp4,video/webm,video/ogg',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Connection': 'keep-alive',
+                    'User-Agent': self.driver.execute_script('return navigator.userAgent;'),
+                    'Referer': self.driver.current_url,
+                    'Origin': urllib.parse.urlparse(self.driver.current_url).scheme + '://' + urllib.parse.urlparse(self.driver.current_url).netloc,
+                }
+
+            session = requests.Session()
+            session.headers.update(reference_headers)
+
             for idx in selected_indices:
                 try:
                     media_url = self.media[idx]['src']
@@ -570,7 +719,18 @@ class ImageScraperUI:
                         self.root.update()
                         continue
 
-                    response = requests.get(media_url, stream=True, timeout=5)
+                    # Adjust headers for this specific request
+                    current_headers = reference_headers.copy()
+                    parsed_url = urllib.parse.urlparse(media_url)
+
+                    # Update domain-specific headers
+                    current_headers['Host'] = parsed_url.netloc
+                    if parsed_url.netloc != urllib.parse.urlparse(self.driver.current_url).netloc:
+                        current_headers['Sec-Fetch-Site'] = 'cross-site'
+                    else:
+                        current_headers['Sec-Fetch-Site'] = 'same-origin'
+
+                    response = session.get(media_url, headers=current_headers, stream=True, timeout=5)
                     response.raise_for_status()
 
                     base, ext = os.path.splitext(filepath)
@@ -620,6 +780,9 @@ class ImageScraperUI:
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--window-size=1920,1080")
+            
+            # Enable CDP logging
+            chrome_options.set_capability('goog:loggingPrefs', {'performance': 'ALL'})
             
             service = Service(ChromeDriverManager().install())
             self.driver = webdriver.Chrome(service=service, options=chrome_options)

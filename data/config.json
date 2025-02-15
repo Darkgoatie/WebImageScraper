@@ -1,0 +1,6 @@
+{
+  "defaultDownloadDirectory": "ImageScraperDownloads",
+  "defaultScrolls": "5",
+  "videoDownloadChunkSize": 65536,
+  "max_workers": 20
+}
